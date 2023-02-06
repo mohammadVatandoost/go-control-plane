@@ -15,6 +15,7 @@
 package cache
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -71,6 +72,20 @@ func NewSnapshotWithTTLs(version string, resources map[resource.Type][]types.Res
 	return &out, nil
 }
 
+func Unmarshal(data []byte) (*Snapshot, error) {
+	var resources [types.UnknownType]Resources
+	err := json.Unmarshal(data, resources)
+	if err != nil {
+		return nil, err
+	}
+	out := Snapshot{Resources: resources}
+	err = out.ConstructVersionMap()
+	if err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // Consistent check verifies that the dependent resources are exactly listed in the
 // snapshot:
 // - all EDS resources are listed by name in CDS resources
@@ -119,6 +134,14 @@ func (s *Snapshot) Consistent() error {
 	}
 
 	return nil
+}
+
+func (s *Snapshot) Marshal() ([]byte, error) {
+	if s == nil {
+		return nil, errors.New("nil snapshot")
+	}
+
+	return json.Marshal(s.Resources)
 }
 
 // GetResources selects snapshot resources by type, returning the map of resources.

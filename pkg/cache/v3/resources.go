@@ -5,10 +5,10 @@ import "github.com/envoyproxy/go-control-plane/pkg/cache/types"
 // Resources is a versioned group of resources.
 type Resources struct {
 	// Version information.
-	Version string
+	Version string `json:"version"`
 
 	// Items in the group indexed by name.
-	Items map[string]types.ResourceWithTTL
+	Items map[string]types.ResourceWithTTL `json:"items"`
 }
 
 // IndexResourcesByName creates a map from the resource name to the resource.
