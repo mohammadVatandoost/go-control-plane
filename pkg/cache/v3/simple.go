@@ -53,6 +53,8 @@ type ResourceSnapshot interface {
 	// GetVersionMap returns a map of resource name to resource version for
 	// all the resources of type indicated by typeURL.
 	GetVersionMap(typeURL string) map[string]string
+
+	GetMarshaledData() []byte
 }
 
 // SnapshotCache is a snapshot-based cache that maintains a single versioned
@@ -112,6 +114,8 @@ type snapshotCache struct {
 	// hash is the hashing function for Envoy nodes
 	hash NodeHash
 
+	storage Storage
+
 	mu sync.RWMutex
 }
 
@@ -130,6 +134,11 @@ func NewSnapshotCache(ads bool, hash NodeHash, logger log.Logger) SnapshotCache 
 	return newSnapshotCache(ads, hash, logger)
 }
 
+// NewSnapshotCacheWithStorage initializes a simple cache with enabling storage.
+func NewSnapshotCacheWithStorage(ads bool, hash NodeHash, logger log.Logger, storage Storage) SnapshotCache {
+	return newSnapshotCacheWithStorage(ads, hash, logger, storage)
+}
+
 func newSnapshotCache(ads bool, hash NodeHash, logger log.Logger) *snapshotCache {
 	if logger == nil {
 		logger = log.NewDefaultLogger()
@@ -141,6 +150,23 @@ func newSnapshotCache(ads bool, hash NodeHash, logger log.Logger) *snapshotCache
 		snapshots: make(map[string]ResourceSnapshot),
 		status:    make(map[string]*statusInfo),
 		hash:      hash,
+	}
+
+	return cache
+}
+
+func newSnapshotCacheWithStorage(ads bool, hash NodeHash, logger log.Logger, storage Storage) *snapshotCache {
+	if logger == nil {
+		logger = log.NewDefaultLogger()
+	}
+
+	cache := &snapshotCache{
+		log:       logger,
+		ads:       ads,
+		snapshots: make(map[string]ResourceSnapshot),
+		status:    make(map[string]*statusInfo),
+		hash:      hash,
+		storage:   storage,
 	}
 
 	return cache
@@ -227,6 +253,12 @@ func (cache *snapshotCache) SetSnapshot(ctx context.Context, node string, snapsh
 
 	// update the existing entry
 	cache.snapshots[node] = snapshot
+	if cache.storage != nil {
+		_, err := cache.storage.Set(ctx, node, snapshot.GetMarshaledData(), 0)
+		if err != nil {
+			return err
+		}
+	}
 
 	// trigger existing watches for which version changed
 	if info, ok := cache.status[node]; ok {

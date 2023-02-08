@@ -18,9 +18,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-
+	cluster "github.com/envoyproxy/go-control-plane/envoy/config/cluster/v3"
+	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
+	endpoint "github.com/envoyproxy/go-control-plane/envoy/config/endpoint/v3"
+	listenerv3 "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
+	routev3 "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
+	tlsv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/transport_sockets/tls/v3"
+	runtime "github.com/envoyproxy/go-control-plane/envoy/service/runtime/v3"
 	"github.com/envoyproxy/go-control-plane/pkg/cache/types"
 	"github.com/envoyproxy/go-control-plane/pkg/resource/v3"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/anypb"
 )
 
 // Snapshot is an internally consistent snapshot of xDS resources.
@@ -34,9 +42,24 @@ type Snapshot struct {
 	// instantiated by calling ConstructVersionMap().
 	// VersionMap is only to be used with delta xDS.
 	VersionMap map[string]map[string]string
+
+	data []byte
 }
 
 var _ ResourceSnapshot = &Snapshot{}
+
+type ResourcesJson struct {
+	Version         string   `json:"version"`
+	Endpoints       [][]byte `json:"endpoints"`
+	Clusters        [][]byte `json:"clusters"`
+	Routes          [][]byte `json:"routes"`
+	ScopedRoute     [][]byte `json:"scopedRoute"`
+	VirtualHostT    [][]byte `json:"virtualHostT"`
+	Listeners       [][]byte `json:"listeners"`
+	Runtimes        [][]byte `json:"runtimes"`
+	Secrets         [][]byte `json:"secrets"`
+	ExtensionConfig [][]byte `json:"extensionConfig"`
+}
 
 // NewSnapshot creates a snapshot from response types and a version.
 // The resources map is keyed off the type URL of a resource, followed by the slice of resource objects.
@@ -48,11 +71,61 @@ func NewSnapshot(version string, resources map[resource.Type][]types.Resource) (
 		if index == types.UnknownType {
 			return nil, errors.New("unknown resource type: " + typ)
 		}
-
 		out.Resources[index] = NewResources(version, resource)
 	}
-
+	d, err := marshalSnapshot(version, resources)
+	if err != nil {
+		return nil, err
+	}
+	out.data = d
 	return &out, nil
+}
+
+func marshalSnapshot(version string, resources map[resource.Type][]types.Resource) ([]byte, error) {
+	var snapShotJson ResourcesJson
+	snapShotJson.Version = version
+	for typ, resourceArray := range resources {
+		var dataArray [][]byte
+		for _, v := range resourceArray {
+			data, err := MarshalResource(v)
+			if err != nil {
+				return nil, err
+			}
+			dataArray = append(dataArray, data)
+		}
+		switch typ {
+		case resource.EndpointType:
+			snapShotJson.Endpoints = dataArray
+			break
+		case resource.ClusterType:
+			snapShotJson.Clusters = dataArray
+			break
+		case resource.RouteType:
+			snapShotJson.Routes = dataArray
+			break
+		case resource.ScopedRouteType:
+			snapShotJson.ScopedRoute = dataArray
+			break
+		case resource.VirtualHostType:
+			snapShotJson.VirtualHostT = dataArray
+			break
+		case resource.ListenerType:
+			snapShotJson.Listeners = dataArray
+			break
+		case resource.RuntimeType:
+			snapShotJson.Runtimes = dataArray
+			break
+		case resource.SecretType:
+			snapShotJson.Secrets = dataArray
+			break
+		case resource.ExtensionConfigType:
+			snapShotJson.ExtensionConfig = dataArray
+			break
+		default:
+			return nil, fmt.Errorf("unknown type, type: %v", typ)
+		}
+	}
+	return json.Marshal(snapShotJson)
 }
 
 // NewSnapshotWithTTLs creates a snapshot of ResourceWithTTLs.
@@ -73,17 +146,131 @@ func NewSnapshotWithTTLs(version string, resources map[resource.Type][]types.Res
 }
 
 func Unmarshal(data []byte) (*Snapshot, error) {
-	var resources [types.UnknownType]Resources
-	err := json.Unmarshal(data, resources)
+	var snapShotJson ResourcesJson
+	err := json.Unmarshal(data, &snapShotJson)
 	if err != nil {
 		return nil, err
 	}
-	out := Snapshot{Resources: resources}
-	err = out.ConstructVersionMap()
-	if err != nil {
-		return nil, err
+	resources := make(map[resource.Type][]types.Resource)
+	if len(snapShotJson.Endpoints) > 0 {
+		var temp []types.Resource
+		for _, v := range snapShotJson.Endpoints {
+			unmarshalledData := &endpoint.ClusterLoadAssignment{}
+			d := &anypb.Any{TypeUrl: resource.EndpointType, Value: v}
+			err = anypb.UnmarshalTo(d, unmarshalledData, proto.UnmarshalOptions{})
+			if err != nil {
+				return nil, err
+			}
+			temp = append(temp, types.Resource(unmarshalledData))
+		}
+		resources[resource.EndpointType] = temp
 	}
-	return &out, nil
+	if len(snapShotJson.Clusters) > 0 {
+		var temp []types.Resource
+		for _, v := range snapShotJson.Clusters {
+			unmarshalledData := &cluster.Cluster{}
+			d := &anypb.Any{TypeUrl: resource.ClusterType, Value: v}
+			err = anypb.UnmarshalTo(d, unmarshalledData, proto.UnmarshalOptions{})
+			if err != nil {
+				return nil, err
+			}
+			temp = append(temp, types.Resource(unmarshalledData))
+		}
+		resources[resource.ClusterType] = temp
+	}
+	if len(snapShotJson.Runtimes) > 0 {
+		var temp []types.Resource
+		for _, v := range snapShotJson.Runtimes {
+			unmarshalledData := &runtime.Runtime{}
+			d := &anypb.Any{TypeUrl: resource.RuntimeType, Value: v}
+			err = anypb.UnmarshalTo(d, unmarshalledData, proto.UnmarshalOptions{})
+			if err != nil {
+				return nil, err
+			}
+			temp = append(temp, types.Resource(unmarshalledData))
+		}
+		resources[resource.RuntimeType] = temp
+	}
+	if len(snapShotJson.Secrets) > 0 {
+		var temp []types.Resource
+		for _, v := range snapShotJson.Secrets {
+			unmarshalledData := &tlsv3.Secret{}
+			d := &anypb.Any{TypeUrl: resource.SecretType, Value: v}
+			err = anypb.UnmarshalTo(d, unmarshalledData, proto.UnmarshalOptions{})
+			if err != nil {
+				return nil, err
+			}
+			temp = append(temp, types.Resource(unmarshalledData))
+		}
+		resources[resource.SecretType] = temp
+	}
+	if len(snapShotJson.VirtualHostT) > 0 {
+		var temp []types.Resource
+		for _, v := range snapShotJson.VirtualHostT {
+			unmarshalledData := &routev3.VirtualHost{}
+			d := &anypb.Any{TypeUrl: resource.VirtualHostType, Value: v}
+			err = anypb.UnmarshalTo(d, unmarshalledData, proto.UnmarshalOptions{})
+			if err != nil {
+				return nil, err
+			}
+			temp = append(temp, types.Resource(unmarshalledData))
+		}
+		resources[resource.VirtualHostType] = temp
+	}
+	if len(snapShotJson.ExtensionConfig) > 0 {
+		var temp []types.Resource
+		for _, v := range snapShotJson.ExtensionConfig {
+			unmarshalledData := &corev3.TypedExtensionConfig{}
+			d := &anypb.Any{TypeUrl: resource.ExtensionConfigType, Value: v}
+			err = anypb.UnmarshalTo(d, unmarshalledData, proto.UnmarshalOptions{})
+			if err != nil {
+				return nil, err
+			}
+			temp = append(temp, types.Resource(unmarshalledData))
+		}
+		resources[resource.ExtensionConfigType] = temp
+	}
+	if len(snapShotJson.Routes) > 0 {
+		var temp []types.Resource
+		for _, v := range snapShotJson.Routes {
+			unmarshalledData := &routev3.RouteConfiguration{}
+			d := &anypb.Any{TypeUrl: resource.RouteType, Value: v}
+			err = anypb.UnmarshalTo(d, unmarshalledData, proto.UnmarshalOptions{})
+			if err != nil {
+				return nil, err
+			}
+			temp = append(temp, types.Resource(unmarshalledData))
+		}
+		resources[resource.RouteType] = temp
+	}
+	if len(snapShotJson.Listeners) > 0 {
+		var temp []types.Resource
+		for _, v := range snapShotJson.Listeners {
+			unmarshalledData := &listenerv3.Listener{}
+			d := &anypb.Any{TypeUrl: resource.ListenerType, Value: v}
+			err = anypb.UnmarshalTo(d, unmarshalledData, proto.UnmarshalOptions{})
+			if err != nil {
+				return nil, err
+			}
+			temp = append(temp, types.Resource(unmarshalledData))
+		}
+		resources[resource.ListenerType] = temp
+	}
+	if len(snapShotJson.ScopedRoute) > 0 {
+		var temp []types.Resource
+		for _, v := range snapShotJson.ScopedRoute {
+			unmarshalledData := &routev3.ScopedRouteConfiguration{}
+			d := &anypb.Any{TypeUrl: resource.ScopedRouteType, Value: v}
+			err = anypb.UnmarshalTo(d, unmarshalledData, proto.UnmarshalOptions{})
+			if err != nil {
+				return nil, err
+			}
+			temp = append(temp, types.Resource(unmarshalledData))
+		}
+		resources[resource.ScopedRouteType] = temp
+	}
+
+	return NewSnapshot(snapShotJson.Version, resources)
 }
 
 // Consistent check verifies that the dependent resources are exactly listed in the
@@ -136,12 +323,8 @@ func (s *Snapshot) Consistent() error {
 	return nil
 }
 
-func (s *Snapshot) Marshal() ([]byte, error) {
-	if s == nil {
-		return nil, errors.New("nil snapshot")
-	}
-
-	return json.Marshal(s.Resources)
+func (s *Snapshot) GetMarshaledData() []byte {
+	return s.data
 }
 
 // GetResources selects snapshot resources by type, returning the map of resources.
