@@ -16,6 +16,7 @@ package cache_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"sync"
@@ -517,6 +518,12 @@ type singleResourceSnapshot struct {
 	typeurl  string
 	name     string
 	resource types.Resource
+	data     []byte
+}
+
+func (s *singleResourceSnapshot) GetMarshaledData() []byte {
+	//TODO implement me
+	return s.data
 }
 
 func (s *singleResourceSnapshot) GetVersion(typeURL string) string {
@@ -634,4 +641,53 @@ func TestAvertPanicForWatchOnNonExistentSnapshot(t *testing.T) {
 	}()
 
 	<-responder
+}
+
+type StorageMock struct {
+	storage map[string][]byte
+}
+
+func NewStorageMock() *StorageMock {
+	return &StorageMock{
+		storage: make(map[string][]byte),
+	}
+}
+
+func (s *StorageMock) Get(ctx context.Context, key string) (string, error) {
+	d, ok := s.storage[key]
+	if !ok {
+		return "", errors.New("it is not exist")
+	}
+	return string(d), nil
+}
+
+func (s *StorageMock) Set(ctx context.Context, key string, value interface{}, expiration time.Duration) (string, error) {
+	s.storage[key] = value.([]byte)
+	return key, nil
+}
+
+func TestNewSnapshotCacheWithStorage(t *testing.T) {
+	storageMock := NewStorageMock()
+	c := cache.NewSnapshotCacheWithStorage(true, group{}, logger{t: t}, storageMock)
+
+	if _, err := c.GetSnapshot(key); err == nil {
+		t.Errorf("unexpected snapshot found for key %q", key)
+	}
+
+	if err := c.SetSnapshot(context.Background(), key, fixture.snapshot()); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := storageMock.Get(context.Background(), key)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	snapUnmarshalled, err := cache.Unmarshal([]byte(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(snapUnmarshalled, fixture.snapshot()) {
+		t.Errorf("expect snapshot: %v, but got snapUnmarshalled: %v", fixture.snapshot(), snapUnmarshalled)
+	}
 }
