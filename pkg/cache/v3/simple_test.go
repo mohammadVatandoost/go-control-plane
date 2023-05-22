@@ -343,6 +343,7 @@ func TestSnapshotCacheWatch(t *testing.T) {
 func TestConcurrentSetWatch(t *testing.T) {
 	c := cache.NewSnapshotCache(false, group{}, logger{t: t})
 	for i := 0; i < 50; i++ {
+		i := i
 		t.Run(fmt.Sprintf("worker%d", i), func(t *testing.T) {
 			t.Parallel()
 			id := fmt.Sprintf("%d", i%2)
@@ -359,7 +360,6 @@ func TestConcurrentSetWatch(t *testing.T) {
 					Node:    &core.Node{Id: id},
 					TypeUrl: rsrc.EndpointType,
 				}, streamState, value)
-
 				defer cancel()
 			}
 		})
@@ -527,6 +527,10 @@ func (s *singleResourceSnapshot) GetMarshaledData() []byte {
 }
 
 func (s *singleResourceSnapshot) GetVersion(typeURL string) string {
+	if typeURL != s.typeurl {
+		return ""
+	}
+
 	return s.version
 }
 
